@@ -12,6 +12,188 @@ function formatMusicItem(item) {
   };
 }
 
+// ============================================================================
+// URL Detection and Resolution
+// ============================================================================
+
+// URL patterns for YouTube
+const URL_PATTERNS = {
+  // Match: https://www.youtube.com/watch?v=VIDEO_ID or https://youtu.be/VIDEO_ID
+  video: /(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/i,
+  // Match: https://www.youtube.com/watch?v=VIDEO_ID&list=PLAYLIST_ID
+  playlist: /(?:youtube\.com\/.*[?&]list=|youtube\.com\/playlist\?list=)([\w-]+)/i,
+  // Match pure video ID (11 characters, alphanumeric with - and _)
+  videoId: /^[\w-]{11}$/,
+};
+
+/**
+ * Check if input is a YouTube URL or video ID
+ */
+function isYoutubeUrl(input: string): boolean {
+  const trimmed = input.trim();
+  return (
+    URL_PATTERNS.video.test(trimmed) ||
+    URL_PATTERNS.playlist.test(trimmed) ||
+    URL_PATTERNS.videoId.test(trimmed)
+  );
+}
+
+/**
+ * Parse YouTube URL to extract video ID and playlist ID
+ */
+function parseYoutubeUrl(input: string): {
+  videoId: string | null;
+  playlistId: string | null;
+} {
+  const trimmed = input.trim();
+
+  // Check for video URL
+  const videoMatch = trimmed.match(URL_PATTERNS.video);
+  const playlistMatch = trimmed.match(URL_PATTERNS.playlist);
+
+  // Check for pure video ID
+  if (URL_PATTERNS.videoId.test(trimmed)) {
+    return { videoId: trimmed, playlistId: null };
+  }
+
+  return {
+    videoId: videoMatch?.[1] || null,
+    playlistId: playlistMatch?.[1] || null,
+  };
+}
+
+/**
+ * Get video info by video ID
+ */
+async function getVideoInfo(videoId: string) {
+  const data = {
+    context: {
+      client: {
+        hl: "zh-CN",
+        gl: "US",
+        clientName: "WEB",
+        clientVersion: "2.20231121.08.00",
+        userAgent:
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+      },
+      user: { lockedSafetyMode: false },
+      request: { useSsl: true },
+    },
+    videoId,
+  };
+
+  const res = await axios.post(
+    "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
+    JSON.stringify(data),
+    {
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+
+  return res.data;
+}
+
+/**
+ * Get playlist items
+ */
+async function getPlaylistItems(playlistId: string) {
+  const items: any[] = [];
+  const clientContext = {
+    client: {
+      hl: "zh-CN",
+      gl: "US",
+      clientName: "WEB",
+      clientVersion: "2.20231121.08.00",
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    },
+    user: { lockedSafetyMode: false },
+    request: { useSsl: true },
+  };
+
+  try {
+    const res = await axios.post(
+      "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false",
+      JSON.stringify({
+        context: clientContext,
+        browseId: `VL${playlistId}`,
+      }),
+      {
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+
+    const contents =
+      res.data?.contents?.twoColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer
+        ?.content?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer
+        ?.contents?.[0]?.playlistVideoListRenderer?.contents || [];
+
+    for (const content of contents) {
+      if (content.playlistVideoRenderer) {
+        const video = content.playlistVideoRenderer;
+        items.push({
+          id: video.videoId,
+          title: video.title?.runs?.[0]?.text || video.title?.simpleText,
+          artist: video.shortBylineText?.runs?.[0]?.text || "Unknown",
+          artwork: video.thumbnail?.thumbnails?.[0]?.url,
+        });
+      }
+    }
+  } catch (error) {
+    console.warn("Failed to fetch YouTube playlist:", error);
+  }
+
+  return items;
+}
+
+/**
+ * Resolve YouTube URL to video/playlist info
+ */
+async function resolveYoutubeUrl(input: string) {
+  const { videoId, playlistId } = parseYoutubeUrl(input);
+
+  // Handle playlist
+  if (playlistId) {
+    try {
+      const items = await getPlaylistItems(playlistId);
+      if (items.length > 0) {
+        return {
+          type: "playlist" as const,
+          data: items,
+        };
+      }
+    } catch (error) {
+      console.warn("Failed to resolve YouTube playlist:", error);
+    }
+  }
+
+  // Handle single video
+  if (videoId) {
+    try {
+      const info = await getVideoInfo(videoId);
+      const details = info.videoDetails;
+
+      if (details) {
+        return {
+          type: "single" as const,
+          data: [
+            {
+              id: details.videoId,
+              title: details.title,
+              artist: details.author,
+              artwork: details.thumbnail?.thumbnails?.[0]?.url,
+            },
+          ],
+        };
+      }
+    } catch (error) {
+      console.warn("Failed to resolve YouTube video:", error);
+    }
+  }
+
+  return null;
+}
+
 let lastQuery;
 let musicContinToken;
 
@@ -110,6 +292,18 @@ async function searchMusic(query, page) {
 
 async function search(query, page, type) {
   if (type === "music") {
+    // Check if input is a YouTube URL or video ID
+    if (page === 1 && isYoutubeUrl(query)) {
+      const resolved = await resolveYoutubeUrl(query);
+      if (resolved) {
+        return {
+          isEnd: true,
+          data: resolved.data,
+        };
+      }
+    }
+
+    // Fall back to normal search
     return await searchMusic(query, page);
   }
 }

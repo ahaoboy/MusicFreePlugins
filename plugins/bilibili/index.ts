@@ -162,6 +162,100 @@ function formatMedia(result: any) {
   };
 }
 
+// ============================================================================
+// URL Detection and Resolution
+// ============================================================================
+
+// URL patterns for bilibili
+const URL_PATTERNS = {
+  // Match: https://www.bilibili.com/video/BV17638zoEXK or av12345
+  video: /(?:bilibili\.com\/video\/|b23\.tv\/)(BV[\w]+|av\d+)/i,
+  // Match pure BV/av id
+  videoId: /^(BV[\w]+|av\d+)$/i,
+};
+
+/**
+ * Check if input is a bilibili URL or video ID
+ */
+function isBilibiliUrl(input: string): boolean {
+  const trimmed = input.trim();
+  return URL_PATTERNS.video.test(trimmed) || URL_PATTERNS.videoId.test(trimmed);
+}
+
+/**
+ * Extract video ID from URL or return the ID directly
+ */
+function extractVideoId(input: string): string | null {
+  const trimmed = input.trim();
+
+  // Check if it's a URL
+  const urlMatch = trimmed.match(URL_PATTERNS.video);
+  if (urlMatch) {
+    return urlMatch[1];
+  }
+
+  // Check if it's a direct video ID
+  const idMatch = trimmed.match(URL_PATTERNS.videoId);
+  if (idMatch) {
+    return idMatch[1];
+  }
+
+  return null;
+}
+
+/**
+ * Resolve bilibili URL/ID to video info
+ */
+async function resolveVideoUrl(input: string) {
+  const videoId = extractVideoId(input);
+  if (!videoId) return null;
+
+  const isBvid = videoId.toLowerCase().startsWith("bv");
+  const params = isBvid
+    ? { bvid: videoId }
+    : { aid: videoId.replace(/^av/i, "") };
+
+  try {
+    const res = await axios.get(
+      "https://api.bilibili.com/x/web-interface/view",
+      {
+        headers: headers,
+        params,
+      }
+    );
+
+    if (res.data.code !== 0) {
+      return null;
+    }
+
+    const data = res.data.data;
+    const pages = data.pages || [];
+
+    // Multi-part video returns as album with multiple tracks
+    if (pages.length > 1) {
+      return {
+        type: "album" as const,
+        data: [
+          {
+            ...formatMedia(data),
+            // Mark as multi-part for album info retrieval
+            _multiPart: true,
+          },
+        ],
+      };
+    }
+
+    // Single video
+    return {
+      type: "single" as const,
+      data: [formatMedia(data)],
+    };
+  } catch (error) {
+    console.warn("Failed to resolve bilibili URL:", error);
+    return null;
+  }
+}
+
 async function searchAlbum(keyword, page) {
   const resultData = await searchBase(keyword, page, "video");
   const albums = resultData.result.map(formatMedia);
@@ -671,6 +765,18 @@ module.exports = {
   },
   supportedSearchType: ["music", "album", "artist"],
   async search(keyword, page, type) {
+    // Check if input is a bilibili URL or video ID
+    if (page === 1 && isBilibiliUrl(keyword)) {
+      const resolved = await resolveVideoUrl(keyword);
+      if (resolved) {
+        return {
+          isEnd: true,
+          data: resolved.data,
+        };
+      }
+    }
+
+    // Fall back to normal search
     if (type === "album" || type === "music") {
       return await searchAlbum(keyword, page);
     }

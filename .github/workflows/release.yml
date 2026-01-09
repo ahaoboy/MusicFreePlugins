@@ -33,7 +33,8 @@ jobs:
         with:
           # name: ${{ steps.get_tag.outputs.tag }}
           # tag: ${{ steps.get_tag.outputs.tag }}
-          name: "nightly"
+          tag: nightly
+          name: nightly
           artifacts: release/*
           token: ${{ secrets.GITHUB_TOKEN }}
           allowUpdates: true

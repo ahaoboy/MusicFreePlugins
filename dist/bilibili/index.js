@@ -131,6 +131,62 @@ function formatMedia(result) {
         date: dayjs.unix(result.pubdate || result.created).format("YYYY-MM-DD"),
     };
 }
+const URL_PATTERNS = {
+    video: /(?:bilibili\.com\/video\/|b23\.tv\/)(BV[\w]+|av\d+)/i,
+    videoId: /^(BV[\w]+|av\d+)$/i,
+};
+function isBilibiliUrl(input) {
+    const trimmed = input.trim();
+    return URL_PATTERNS.video.test(trimmed) || URL_PATTERNS.videoId.test(trimmed);
+}
+function extractVideoId(input) {
+    const trimmed = input.trim();
+    const urlMatch = trimmed.match(URL_PATTERNS.video);
+    if (urlMatch) {
+        return urlMatch[1];
+    }
+    const idMatch = trimmed.match(URL_PATTERNS.videoId);
+    if (idMatch) {
+        return idMatch[1];
+    }
+    return null;
+}
+async function resolveVideoUrl(input) {
+    const videoId = extractVideoId(input);
+    if (!videoId)
+        return null;
+    const isBvid = videoId.toLowerCase().startsWith("bv");
+    const params = isBvid
+        ? { bvid: videoId }
+        : { aid: videoId.replace(/^av/i, "") };
+    try {
+        const res = await axios_1.default.get("https://api.bilibili.com/x/web-interface/view", {
+            headers: headers,
+            params,
+        });
+        if (res.data.code !== 0) {
+            return null;
+        }
+        const data = res.data.data;
+        const pages = data.pages || [];
+        if (pages.length > 1) {
+            return {
+                type: "album",
+                data: [
+                    Object.assign(Object.assign({}, formatMedia(data)), { _multiPart: true }),
+                ],
+            };
+        }
+        return {
+            type: "single",
+            data: [formatMedia(data)],
+        };
+    }
+    catch (error) {
+        console.warn("Failed to resolve bilibili URL:", error);
+        return null;
+    }
+}
 async function searchAlbum(keyword, page) {
     const resultData = await searchBase(keyword, page, "video");
     const albums = resultData.result.map(formatMedia);
@@ -556,6 +612,15 @@ module.exports = {
     },
     supportedSearchType: ["music", "album", "artist"],
     async search(keyword, page, type) {
+        if (page === 1 && isBilibiliUrl(keyword)) {
+            const resolved = await resolveVideoUrl(keyword);
+            if (resolved) {
+                return {
+                    isEnd: true,
+                    data: resolved.data,
+                };
+            }
+        }
         if (type === "album" || type === "music") {
             return await searchAlbum(keyword, page);
         }

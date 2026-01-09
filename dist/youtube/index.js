@@ -10,6 +10,129 @@ function formatMusicItem(item) {
         artwork: (_g = (_f = (_e = item === null || item === void 0 ? void 0 : item.thumbnail) === null || _e === void 0 ? void 0 : _e.thumbnails) === null || _f === void 0 ? void 0 : _f[0]) === null || _g === void 0 ? void 0 : _g.url,
     };
 }
+const URL_PATTERNS = {
+    video: /(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/i,
+    playlist: /(?:youtube\.com\/.*[?&]list=|youtube\.com\/playlist\?list=)([\w-]+)/i,
+    videoId: /^[\w-]{11}$/,
+};
+function isYoutubeUrl(input) {
+    const trimmed = input.trim();
+    return (URL_PATTERNS.video.test(trimmed) ||
+        URL_PATTERNS.playlist.test(trimmed) ||
+        URL_PATTERNS.videoId.test(trimmed));
+}
+function parseYoutubeUrl(input) {
+    const trimmed = input.trim();
+    const videoMatch = trimmed.match(URL_PATTERNS.video);
+    const playlistMatch = trimmed.match(URL_PATTERNS.playlist);
+    if (URL_PATTERNS.videoId.test(trimmed)) {
+        return { videoId: trimmed, playlistId: null };
+    }
+    return {
+        videoId: (videoMatch === null || videoMatch === void 0 ? void 0 : videoMatch[1]) || null,
+        playlistId: (playlistMatch === null || playlistMatch === void 0 ? void 0 : playlistMatch[1]) || null,
+    };
+}
+async function getVideoInfo(videoId) {
+    const data = {
+        context: {
+            client: {
+                hl: "zh-CN",
+                gl: "US",
+                clientName: "WEB",
+                clientVersion: "2.20231121.08.00",
+                userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+            },
+            user: { lockedSafetyMode: false },
+            request: { useSsl: true },
+        },
+        videoId,
+    };
+    const res = await axios_1.default.post("https://www.youtube.com/youtubei/v1/player?prettyPrint=false", JSON.stringify(data), {
+        headers: { "Content-Type": "application/json" },
+    });
+    return res.data;
+}
+async function getPlaylistItems(playlistId) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z;
+    const items = [];
+    const clientContext = {
+        client: {
+            hl: "zh-CN",
+            gl: "US",
+            clientName: "WEB",
+            clientVersion: "2.20231121.08.00",
+            userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        },
+        user: { lockedSafetyMode: false },
+        request: { useSsl: true },
+    };
+    try {
+        const res = await axios_1.default.post("https://www.youtube.com/youtubei/v1/browse?prettyPrint=false", JSON.stringify({
+            context: clientContext,
+            browseId: `VL${playlistId}`,
+        }), {
+            headers: { "Content-Type": "application/json" },
+        });
+        const contents = ((_p = (_o = (_m = (_l = (_k = (_j = (_h = (_g = (_f = (_e = (_d = (_c = (_b = (_a = res.data) === null || _a === void 0 ? void 0 : _a.contents) === null || _b === void 0 ? void 0 : _b.twoColumnBrowseResultsRenderer) === null || _c === void 0 ? void 0 : _c.tabs) === null || _d === void 0 ? void 0 : _d[0]) === null || _e === void 0 ? void 0 : _e.tabRenderer) === null || _f === void 0 ? void 0 : _f.content) === null || _g === void 0 ? void 0 : _g.sectionListRenderer) === null || _h === void 0 ? void 0 : _h.contents) === null || _j === void 0 ? void 0 : _j[0]) === null || _k === void 0 ? void 0 : _k.itemSectionRenderer) === null || _l === void 0 ? void 0 : _l.contents) === null || _m === void 0 ? void 0 : _m[0]) === null || _o === void 0 ? void 0 : _o.playlistVideoListRenderer) === null || _p === void 0 ? void 0 : _p.contents) || [];
+        for (const content of contents) {
+            if (content.playlistVideoRenderer) {
+                const video = content.playlistVideoRenderer;
+                items.push({
+                    id: video.videoId,
+                    title: ((_s = (_r = (_q = video.title) === null || _q === void 0 ? void 0 : _q.runs) === null || _r === void 0 ? void 0 : _r[0]) === null || _s === void 0 ? void 0 : _s.text) || ((_t = video.title) === null || _t === void 0 ? void 0 : _t.simpleText),
+                    artist: ((_w = (_v = (_u = video.shortBylineText) === null || _u === void 0 ? void 0 : _u.runs) === null || _v === void 0 ? void 0 : _v[0]) === null || _w === void 0 ? void 0 : _w.text) || "Unknown",
+                    artwork: (_z = (_y = (_x = video.thumbnail) === null || _x === void 0 ? void 0 : _x.thumbnails) === null || _y === void 0 ? void 0 : _y[0]) === null || _z === void 0 ? void 0 : _z.url,
+                });
+            }
+        }
+    }
+    catch (error) {
+        console.warn("Failed to fetch YouTube playlist:", error);
+    }
+    return items;
+}
+async function resolveYoutubeUrl(input) {
+    var _a, _b, _c;
+    const { videoId, playlistId } = parseYoutubeUrl(input);
+    if (playlistId) {
+        try {
+            const items = await getPlaylistItems(playlistId);
+            if (items.length > 0) {
+                return {
+                    type: "playlist",
+                    data: items,
+                };
+            }
+        }
+        catch (error) {
+            console.warn("Failed to resolve YouTube playlist:", error);
+        }
+    }
+    if (videoId) {
+        try {
+            const info = await getVideoInfo(videoId);
+            const details = info.videoDetails;
+            if (details) {
+                return {
+                    type: "single",
+                    data: [
+                        {
+                            id: details.videoId,
+                            title: details.title,
+                            artist: details.author,
+                            artwork: (_c = (_b = (_a = details.thumbnail) === null || _a === void 0 ? void 0 : _a.thumbnails) === null || _b === void 0 ? void 0 : _b[0]) === null || _c === void 0 ? void 0 : _c.url,
+                        },
+                    ],
+                };
+            }
+        }
+        catch (error) {
+            console.warn("Failed to resolve YouTube video:", error);
+        }
+    }
+    return null;
+}
 let lastQuery;
 let musicContinToken;
 async function searchMusic(query, page) {
@@ -93,6 +216,15 @@ async function searchMusic(query, page) {
 }
 async function search(query, page, type) {
     if (type === "music") {
+        if (page === 1 && isYoutubeUrl(query)) {
+            const resolved = await resolveYoutubeUrl(query);
+            if (resolved) {
+                return {
+                    isEnd: true,
+                    data: resolved.data,
+                };
+            }
+        }
         return await searchMusic(query, page);
     }
 }

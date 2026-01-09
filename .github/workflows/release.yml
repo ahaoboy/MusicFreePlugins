@@ -1,0 +1,42 @@
+name: Releases
+
+on:
+  push:
+  schedule:
+    - cron: "0 0 * * *"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: "build ts"
+        run: |
+          npm i
+          npm run build
+
+          mkdir -p ./release
+
+          find dist -mindepth 2 -maxdepth 2 -name '*.js' -o -name '*.json' | while read -r f; do
+            dir=$(basename "$(dirname "$f")")
+            ext="${f##*.}"
+            cp "$f" "release/$dir.$ext"
+          done
+
+      - name: release
+        uses: ncipollo/release-action@v1
+        with:
+          # name: ${{ steps.get_tag.outputs.tag }}
+          # tag: ${{ steps.get_tag.outputs.tag }}
+          tag: "nightly"
+          name: "nightly"
+          artifacts: release/*
+          token: ${{ secrets.GITHUB_TOKEN }}
+          allowUpdates: true
+          commit: main
+          replacesArtifacts: true
